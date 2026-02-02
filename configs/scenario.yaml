@@ -1,0 +1,25 @@
+world:
+  width: 100
+  height: 100
+
+map:
+  image_path: "assests/maps/map.jpg"
+
+drone_model: "drone_model.yaml"
+
+drones:
+  count: 10
+
+coverage:
+  grid_rows: 80
+  grid_cols: 80
+  target_percentage: 0.75
+
+obstacles:
+  enabled: true
+  count: 5
+  radius: 6
+
+simulation:
+  max_steps: 2000
+  render_fps: 60
