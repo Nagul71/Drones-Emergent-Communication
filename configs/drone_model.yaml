@@ -1,7 +1,7 @@
 drone:
   max_battery: 500
-  move_step: 0.2
+  move_step: 0.1
   move_cost: 0.25
   size: 2.5
-  sensing_radius: 10
+  sensing_radius: 20
   size: 6

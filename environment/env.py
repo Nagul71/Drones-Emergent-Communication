@@ -61,13 +61,17 @@ class Environment:
 
         return self._get_observations()
 
-    def step(self, actions,dt):
+    def step(self, actions):
         self.current_step += 1
-        model = self.drone_model
+        rewards = {}
+
+        prev_coverage = self.coverage_grid.get_coverage_percentage()
 
         for i, action in actions.items():
             d = self.drones[i]
+
             if not d["active"]:
+                rewards[i] = -1.0   # dead drone penalty
                 continue
 
             dx, dy = action
@@ -75,61 +79,73 @@ class Environment:
             dx /= norm
             dy /= norm
 
+            d["heading"] = np.arctan2(dy, dx)
 
-            desired_heading = math.atan2(dy, dx)
-            # --- Smooth rotation ---
-            max_turn_rate = math.radians(120)  # degrees/sec → rad/sec
+            nx = d["x"] + dx * self.drone_model["move_step"]
+            ny = d["y"] + dy * self.drone_model["move_step"]
 
-            angle_diff = (desired_heading - d["heading"] + math.pi) % (2 * math.pi) - math.pi
-
-            turn = np.clip(angle_diff, -max_turn_rate * dt, max_turn_rate * dt)
-            d["heading"] += turn
-
-
-            nx = d["x"] + dx * model["move_step"]
-            ny = d["y"] + dy * model["move_step"]
-
-            # ---- Obstacle collision ----
-            blocked = False
+            collided = False
             for ox, oy in self.obstacles:
                 if np.hypot(nx - ox, ny - oy) < self.scenario.obstacles["radius"]:
-                    blocked = True
+                    collided = True
                     break
 
-            if not blocked:
+            if not collided:
                 d["x"] = np.clip(nx, 0, self.width)
                 d["y"] = np.clip(ny, 0, self.height)
 
-            d["path"].append((d["x"], d["y"]))
-            d["battery"] -= model["move_cost"]
-
+            # Battery cost
+            d["battery"] -= self.drone_model["move_cost"]
             if d["battery"] <= 0:
                 d["active"] = False
 
+            # Coverage
             self.coverage_grid.mark_covered(d["x"], d["y"])
+
+            # ---------- Reward components ----------
+            reward = 0.0
+
+            # Battery penalty
+            reward -= 0.01
+
+            # Collision penalty
+            if collided:
+                reward -= 0.2
+
+            rewards[i] = reward
+
+        # ---------- Global coverage reward ----------
+        new_coverage = self.coverage_grid.get_coverage_percentage()
+        coverage_gain = new_coverage - prev_coverage
+
+        for i in rewards:
+            rewards[i] += 100.0 * coverage_gain   # shared team reward
 
         done = (
             self.current_step >= self.max_steps
             or all(not d["active"] for d in self.drones)
-            or self.coverage_grid.get_coverage_percentage()
-               >= self.scenario.coverage["target_percentage"]
+            or new_coverage >= self.scenario.coverage["target_percentage"]
         )
 
-        return self._get_observations(), {}, done, {}
+        self.last_rewards = rewards
 
+        return self._get_observations(), rewards, done, {}
+
+    
     def _get_observations(self):
         observations = {}
         radius = self.drone_model["sensing_radius"]
 
         for i, d in enumerate(self.drones):
+            # Inactive drone → zero observation
             if not d["active"]:
                 observations[i] = np.zeros(9, dtype=np.float32)
                 continue
 
             x, y = d["x"], d["y"]
 
-            # ---- Nearest drone ----
-            nearest_dx, nearest_dy = 0.0, 0.0
+            # ---------- Nearest drone ----------
+            ndx, ndy = 0.0, 0.0
             min_dist = radius
 
             for j, other in enumerate(self.drones):
@@ -138,29 +154,29 @@ class Environment:
 
                 dx = other["x"] - x
                 dy = other["y"] - y
-                dist = np.hypot(dx, dy)
+                dist = math.hypot(dx, dy)
 
                 if dist < min_dist:
                     min_dist = dist
-                    nearest_dx = dx / radius
-                    nearest_dy = dy / radius
+                    ndx = dx / radius
+                    ndy = dy / radius
 
-            # ---- Nearest obstacle ----
-            obs_dx, obs_dy = 0.0, 0.0
+            # ---------- Nearest obstacle ----------
+            odx, ody = 0.0, 0.0
             min_obs_dist = radius
 
             for ox, oy in self.obstacles:
                 dx = ox - x
                 dy = oy - y
-                dist = np.hypot(dx, dy)
+                dist = math.hypot(dx, dy)
 
                 if dist < min_obs_dist:
                     min_obs_dist = dist
-                    obs_dx = dx / radius
-                    obs_dy = dy / radius
+                    odx = dx / radius
+                    ody = dy / radius
 
-            # ---- Local coverage ----
-            local_coverage = self.coverage_grid.local_coverage(x, y, radius)
+            # ---------- Local coverage ----------
+            local_cov = self.coverage_grid.local_coverage(x, y, radius)
 
             observations[i] = np.array([
                 x / self.width,
@@ -168,17 +184,16 @@ class Environment:
                 d["heading"] / math.pi,
                 d["battery"] / self.drone_model["max_battery"],
 
-                nearest_dx,
-                nearest_dy,
+                ndx,
+                ndy,
 
-                obs_dx,
-                obs_dy,
+                odx,
+                ody,
 
-                local_coverage
+                local_cov
             ], dtype=np.float32)
 
         return observations
-
 
     def random_actions(self):
         return {

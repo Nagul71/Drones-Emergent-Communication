@@ -11,6 +11,7 @@ class PygameRenderer:
         self.scenario = scenario
         self.scale = 8  # pixels per world unit
         self.paused = False
+        self.show_sensing = True   # toggle for Module 2 visualization
 
         # ---- Fonts ----
         self.font = pygame.font.SysFont("arial", 14)
@@ -51,6 +52,7 @@ class PygameRenderer:
     # -------------------------------------------------
     def draw(self, env):
         # ---- Events ----
+        # ---- Events ----
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
@@ -60,10 +62,14 @@ class PygameRenderer:
                 if event.key == pygame.K_SPACE:
                     self.paused = not self.paused
 
-                if event.key == pygame.K_s:
+                elif event.key == pygame.K_s:
                     filename = f"snap_{int(time.time())}.png"
                     pygame.image.save(self.screen, filename)
                     print(f"[SNAPSHOT SAVED] {filename}")
+
+                elif event.key == pygame.K_v:
+                    self.show_sensing = not self.show_sensing
+                    print("SHOW SENSING:", self.show_sensing)
 
         # ---- Draw map ----
         self.screen.blit(self.map, (0, 0))
@@ -86,6 +92,28 @@ class PygameRenderer:
                     )
 
         self.screen.blit(overlay, (0, 0))
+
+        # ---- DEBUG: FORCE sensing visualization ----
+        if self.show_sensing:
+            sensing_radius = self.scenario.drone_model["sensing_radius"]
+            sensing_px = int(sensing_radius * self.scale)
+
+            for d in env.drones:
+                if not d["active"]:
+                    continue
+
+                x = int(d["x"] * self.scale)
+                y = int((self.scenario.world["height"] - d["y"]) * self.scale)
+
+                # BIG SOLID RED CIRCLE (IMPOSSIBLE TO MISS)
+                pygame.draw.circle(
+                    self.screen,
+                    (255, 0, 0),
+                    (x, y),
+                    sensing_px,
+                    3
+                )
+
 
         # ---- Draw drones ----
         for i, d in enumerate(env.drones):
@@ -114,6 +142,24 @@ class PygameRenderer:
             bar_x = x - bar_w // 2
             bar_y = y + rect.height // 2 + 4
 
+            # ---- Draw path trail (visual proof of learning) ----
+            if len(d["path"]) > 2:
+                points = [
+                    (
+                        int(px * self.scale),
+                        int((self.scenario.world["height"] - py) * self.scale)
+                    )
+                    for px, py in d["path"][-50:]
+                ]
+                pygame.draw.lines(
+                    self.screen,
+                    (0, 150, 255),
+                    False,
+                    points,
+                    2
+                )
+
+
             pygame.draw.rect(
                 self.screen, (120, 0, 0),
                 (bar_x, bar_y, bar_w, bar_h)
@@ -122,6 +168,29 @@ class PygameRenderer:
                 self.screen, (0, 220, 0),
                 (bar_x, bar_y, int(bar_w * b_ratio), bar_h)
             )
+
+        # ---- Reward text (Module 3) ----
+            reward = 0.0
+            if hasattr(env, "last_rewards"):
+                reward = env.last_rewards.get(i, 0.0)
+
+            reward_color = (0, 255, 0) if reward > 0 else (255, 80, 80)
+            self.draw_text(f"R:{reward:+.2f}", x - 14, y - 30, reward_color)
+
+
+            # ---- Reward flash ring ----
+            if reward > 0.05:
+                pygame.draw.circle(
+                    self.screen, (0, 255, 0),
+                    (x, y), 14, 2
+                )
+            elif reward < -0.05:
+                pygame.draw.circle(
+                    self.screen, (255, 0, 0),
+                    (x, y), 14, 2
+                )
+
+
 
         # ---- Legend panel (TOP RIGHT) ----
         total = len(env.drones)
@@ -157,4 +226,36 @@ class PygameRenderer:
             self.draw_text("PAUSED", self.width // 2 - 30, 20, (255, 80, 80))
 
         pygame.display.flip()
-        self.clock.tick(self.scenario.simulation["render_fps"])
+        self.clock.tick(30)   # slower = easier to see learning
+
+
+        # ---- Sensing radius visualization (Module 2) ----
+        if self.show_sensing:
+            sensing_radius = self.scenario.drone_model["sensing_radius"]
+            sensing_px = int(sensing_radius * self.scale)
+
+            sensing_surface = pygame.Surface(
+                (self.width, self.height),
+                pygame.SRCALPHA
+            )
+
+            for d in env.drones:
+                if not d["active"]:
+                    continue
+
+                x = int(d["x"] * self.scale)
+                y = int((self.scenario.world["height"] - d["y"]) * self.scale)
+
+                pygame.draw.circle(
+                    sensing_surface,
+                    (0, 120, 255, 50),   # blue transparent
+                    (x, y),
+                    sensing_px,
+                    2
+                )
+
+            self.screen.blit(sensing_surface, (0, 0))
+
+        
+
+
